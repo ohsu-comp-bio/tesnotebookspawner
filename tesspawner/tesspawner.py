@@ -12,7 +12,7 @@ from traitlets import (
     Dict,
     Unicode,
     Bool,
-    Int,
+    Integer,
     Any,
     default
 )
@@ -28,12 +28,21 @@ from .tes import (
 
 
 class TesSpawner(Spawner):
-    _endpoint = "http://127.0.0.1:6000/v1/jobs"
-    _jobID = ""
+    # override default since batch systems typically need longer
+    start_timeout = Integer(300, config=True)
+
+    endpoint = Unicode("http://127.0.0.1:6000/v1/jobs",
+                       help="TES server endpoint").tag(config=True)
+
+    container_image = Unicode("jupyterhub/singleuser:latest").tag(config=True)
+    notebook_command = Unicode("bash /srv/singleuser/singleuser.sh").tag(config=True)
+
+    task_id = Unicode("")
+    status = Unicode("")
 
     def _create_message(self):
         message = Task(
-            name="jupyterhub-singleusernotbook",
+            name=self.container_image,
             projectID=None,
             description=None,
             inputs=[],
@@ -55,69 +64,99 @@ class TesSpawner(Spawner):
             ),
             docker=[
                 DockerExecutor(
-                    imageName="jupyterhub/singleuser:latest",
-                    cmd=["sh", "/srv/singleuser/singleuser.sh"],
+                    imageName=self.container_image,
+                    cmd=["bash", "-c", "{}".format(self.build_command())],
                     workDir=None,
                     stdin=None,
-                    stdout=None,
-                    stderr=None
+                    stdout="stdout",
+                    stderr="stderr"
                 )
             ]
         )
+
         return clean_task_message(attr.asdict(message))
 
-    @gen.coroutine
-    def start(self,
-              image=None,
-              extra_create_kwargs=None,
-              extra_start_kwargs=None,
-              extra_host_config=None):
-        """Start the single-user server in a docker container via TES. You can
-        override the default parameters passed to `create_container` through
-        the `extra_create_kwargs` dictionary and passed to `start` through the
-        `extra_start_kwargs` dictionary.  You can also override the
-        'host_config' parameter passed to `create_container` through the
-        `extra_host_config` dictionary.
+    def get_env(self):
+        env = super(TesSpawner, self).get_env()
+        env.update(dict(
+            JPY_USER=self.user.name,
+            JPY_COOKIE_NAME=self.user.server.cookie_name,
+            JPY_BASE_URL=self.user.server.base_url,
+            JPY_HUB_PREFIX=self.hub.server.base_url,
+            JPY_HUB_API_URL=self.hub.api_url
+        ))
 
-        Per-instance `extra_create_kwargs`, `extra_start_kwargs`, and
-        `extra_host_config` take precedence over their global counterparts.
-        """
+        if self.notebook_dir:
+            env['NOTEBOOK_DIR'] = self.notebook_dir
+
+        return env
+
+    def build_command(self):
+        exports = ["export"]
+        env = self.get_env()
+        whitelist = ["JPY_API_TOKEN", "JPY_BASE_URL", "JPY_COOKIE_NAME",
+                     "JPY_HUB_API_URL", "JPY_HUB_PREFIX", "JPY_USER",
+                     "NOTEBOOK_DIR"]
+        for k, v in env.items():
+            if k in whitelist:
+                exports.append("{0}={1}".format(k, v))
+
+        cmd = " ".join(exports) + " && " + self.notebook_command
+        return cmd
+
+    def load_state(self, state):
+        """load task_id from state"""
+        super(TesSpawner, self).load_state(state)
+        self.task_id = state.get('task_id', '')
+        self.status = state.get('status', '')
+
+    def get_state(self):
+        """add task_id to state"""
+        state = super(TesSpawner, self).get_state()
+        if self.task_id:
+            state['task_id'] = self.task_id
+        if self.status:
+            state['status'] = self.status
+        return state
+
+    def clear_state(self):
+        """clear job_id state"""
+        super(TesSpawner, self).clear_state()
+        self.task_id = ""
+        self.status = ''
+
+    @gen.coroutine
+    def start(self):
+        """Start the single-user server in a docker container via TES."""
 
         # create task message defining notebook server
         message = self._create_message()
 
         self.log.info(
-            "Submitted task: {task} to enpoint: {endpoint}".format(
+            "Submititng task: {task} to {endpoint}".format(
                 task=message,
-                endpoint=self._endpoint)
+                endpoint=self.endpoint)
         )
 
         # post task message to server
-        self._jobID = self._post_task(json.dumps(message))
+        self._post_task(json.dumps(message))
 
         self.log.info(
-            "Started TES job: {jobID}".format(jobID=self._jobID)
+            "Started TES job: {0}".format(self.task_id)
         )
 
-        ip, port = yield self.get_ip_and_port()
-        # store on user for pre-jupyterhub-0.7:
-        self.user.server.ip = ip
-        self.user.server.port = port
-        # jupyterhub 0.7 prefers returning ip, port:
-        return (ip, port)
+        return ("0.0.0.0", 8888)
 
     @gen.coroutine
     def poll(self):
-        """Poll TES worker for status"""
         terminal = ["Complete", "Error", "SystemError", "Canceled"]
-        status = self._get_task_status()
+        self._get_task_status()
 
         self.log.debug(
-            "Status: %s",
-            status
+            "Job {0} status: {1}".format(self.task_id, self.status)
         )
 
-        if status not in terminal:
+        if self.status not in terminal:
             return None
         else:
             return 1
@@ -127,19 +166,31 @@ class TesSpawner(Spawner):
         """Stop the TES worker"""
         raise NotImplementedError
 
+    @gen.coroutine
     def _post_task(self, json_message):
         """POST task to v1/jobs"""
-        response = requests.post(url=self._endpoint, data=json_message)
+        response = requests.post(url=self.endpoint, data=json_message)
+        if response.status_code // 100 != 2:
+            raise RuntimeError("[ERROR] {0}".format(response.text))
         response_json = json.loads(response.text)
-        jobID = response_json['value']
-        return jobID
+        self.task_id = response_json['value']
+        return response
 
+    @gen.coroutine
     def _get_task_status(self):
         """GET v1/jobs/<jobID>"""
-        print(self._endpoint, self._jobID)
-        endpoint = self._endpoint + "/" + self._jobID
+        if self.task_id is None or len(self.task_id) == 0:
+            # job not running
+            self.status = ""
+            return self.status
+
+        self.log.debug(
+            "GET {0}/{1}".format(self.endpoint, self.task_id)
+        )
+        endpoint = self.endpoint + "/" + self.task_id
         response = requests.get(url=endpoint)
+        if response.status_code // 100 != 2:
+            raise RuntimeError("[ERROR] {0}".format(response.text))
         response_json = json.loads(response.text)
-        # state = response_json['state']
-        state = response_json
-        return state
+        self.status = response_json["state"]
+        return response
