@@ -44,8 +44,7 @@ class TesSpawner(Spawner):
         return """
         <label for="image">Docker Image</label>
         <select name="image">
-          <option value="jupyterhub/singleuser:latest" selected>jupyterhub/singleuser</option>
-          <option value="jupyter/datascience-notebook:latest">jupyter/datascience-notebook</option>
+          <option value="jupyter/datascience-notebook:latest" selected>jupyter/datascience-notebook</option>
           <option value="jupyter/tensorflow-notebook:latest">jupyter/tensorflow-notebook</option>
         </select>
         <label for="cpu">CPU</label>

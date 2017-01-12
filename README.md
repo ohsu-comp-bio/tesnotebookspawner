@@ -1,1 +1,2 @@
-# TESspawner for Jupyterhub
+# TES notebook spawner for Jupyterhub
+
