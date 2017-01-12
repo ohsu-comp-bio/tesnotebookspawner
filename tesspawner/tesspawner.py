@@ -1,5 +1,6 @@
 """
-A Spawner for JupyterHub that runs each user's server in a separate docker container spun up by TES
+A Spawner for JupyterHub that runs each user's server in a separate docker
+container spun up by TES
 """
 
 import attr
@@ -17,7 +18,6 @@ from traitlets import (
     Any,
     default
 )
-
 from .tes import (
     Task,
     TaskParameter,
@@ -145,7 +145,7 @@ class TesSpawner(Spawner):
         self.log.info(
             "Started TES job: {0}".format(self.task_id)
         )
-
+        time.sleep(5)
         ip, port = yield self._get_ip_and_port(0)
         return (ip, port)
 
@@ -213,10 +213,14 @@ class TesSpawner(Spawner):
 
         if "metadata" not in response_json:
             time.sleep(1)
-            yield self._get_ip_and_port(retries + 1)
+            return gen.Return(self._get_ip_and_port(retries + 1))
 
         # suffix added to task_id to reflect step since TES supports an array
         # of DockerExecutors
+        self.log.info(
+            "Metadata for job: {0}".format(response_json)
+        )
+
         task_meta = json.loads(response_json["metadata"][self.task_id + "0"])
         ip = task_meta['NetworkSettings']['IPAddress']
 
