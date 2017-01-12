@@ -5,6 +5,7 @@ A Spawner for JupyterHub that runs each user's server in a separate docker conta
 import attr
 import json
 import requests
+import time
 
 from tornado import gen
 from jupyterhub.spawner import Spawner
@@ -145,7 +146,8 @@ class TesSpawner(Spawner):
             "Started TES job: {0}".format(self.task_id)
         )
 
-        return ("0.0.0.0", 8888)
+        ip, port = yield self._get_ip_and_port(0)
+        return (ip, port)
 
     @gen.coroutine
     def poll(self):
@@ -177,13 +179,8 @@ class TesSpawner(Spawner):
         return response
 
     @gen.coroutine
-    def _get_task_status(self):
+    def _get_task(self):
         """GET v1/jobs/<jobID>"""
-        if self.task_id is None or len(self.task_id) == 0:
-            # job not running
-            self.status = ""
-            return self.status
-
         self.log.debug(
             "GET {0}/{1}".format(self.endpoint, self.task_id)
         )
@@ -191,6 +188,42 @@ class TesSpawner(Spawner):
         response = requests.get(url=endpoint)
         if response.status_code // 100 != 2:
             raise RuntimeError("[ERROR] {0}".format(response.text))
-        response_json = json.loads(response.text)
-        self.status = response_json["state"]
         return response
+
+    @gen.coroutine
+    def _get_task_status(self):
+        if self.task_id is None or len(self.task_id) == 0:
+            # job not running
+            self.status = ""
+            return self.status
+
+        response = yield self._get_task()
+        response_json = json.loads(response.text)
+        status = response_json["state"]
+        self.status = status
+        return self.status
+
+    @gen.coroutine
+    def _get_ip_and_port(self, retries):
+        if retries >= 10:
+            raise RuntimeError("Failed to get the ip and port of the docker container")
+
+        response = yield self._get_task()
+        response_json = json.loads(response.text)
+
+        if "metadata" not in response_json:
+            time.sleep(1)
+            yield self._get_ip_and_port(retries + 1)
+
+        # suffix added to task_id to reflect step since TES supports an array
+        # of DockerExecutors
+        task_meta = json.loads(response_json["metadata"][self.task_id + "0"])
+        ip = task_meta['NetworkSettings']['IPAddress']
+
+        # TODO handle errors better
+        if len(task_meta['HostConfig']['PortBindings'].keys()) != 1:
+            raise RuntimeError("Container has more than one port binding")
+
+        for k, v in task_meta['HostConfig']['PortBindings'].items():
+            port = v[0]['HostPort']
+        return ip, port
