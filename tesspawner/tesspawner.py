@@ -29,35 +29,75 @@ from .tes import (
 
 
 class TesSpawner(Spawner):
-    # override default since batch systems typically need longer
+    # override default since TES may need longer
     start_timeout = Integer(300, config=True)
 
     endpoint = Unicode("http://127.0.0.1:6000/v1/jobs",
                        help="TES server endpoint").tag(config=True)
 
-    container_image = Unicode("jupyterhub/singleuser:latest").tag(config=True)
-    notebook_command = Unicode("bash /srv/singleuser/singleuser.sh").tag(config=True)
+    notebook_command = Unicode("bash /usr/local/bin/start-singleuser.sh").tag(config=False)
 
     task_id = Unicode("")
     status = Unicode("")
 
+    def _options_form_default(self):
+        return """
+        <label for="image">Docker Image</label>
+        <select name="image">
+          <option value="jupyterhub/singleuser:latest" selected>jupyterhub/singleuser</option>
+          <option value="jupyter/datascience-notebook:latest">jupyter/datascience-notebook</option>
+          <option value="jupyter/tensorflow-notebook:latest">jupyter/tensorflow-notebook</option>
+        </select>
+        <label for="cpu">CPU</label>
+        <input name="cpu" placeholder="1"></input>
+        <label for="mem">RAM (GB)</label>
+        <input name="mem" placeholder="8"></input>
+        <label for="disk">Disk Size (GB)</label>
+        <input name="disk" placeholder="10"></input>
+        """
+
+    @staticmethod
+    def _process_option(v, default_val, typef):
+        if v == '':
+            return default_val
+        else:
+            return typef(v)
+
+    def options_from_form(self, formdata):
+        """Handle user specifed options"""
+        self.log.info("Form data: {}".format(formdata))
+        options = {}
+        options['cpu'] = self._process_option(
+            formdata.get('cpu', [''])[0], 1, int
+        )
+        options['mem'] = self._process_option(
+            formdata.get('mem', [''])[0], 8, float
+        )
+        options['disk'] = self._process_option(
+            formdata.get('disk', [''])[0], 10, float
+        )
+        options['image'] = formdata.get('image', [''])[0]
+        self.log.info("Parsed options: {}".format(options))
+        return options
+
     def _create_message(self):
+        """Generate a TES Task message"""
         message = Task(
-            name=self.container_image,
+            name=self.user_options.get("image"),
             projectID=None,
             description=None,
             inputs=[],
             outputs=[],
             resources=Resources(
-                minimumCpuCores=1,
+                minimumCpuCores=self.user_options.get("cpu"),
                 preemptible=None,
-                minimumRamGb=4,
+                minimumRamGb=self.user_options.get("mem"),
                 volumes=[
                     Volume(
                         name="user_home",
-                        sizeGb=5,
+                        sizeGb=self.user_options.get("disk"),
                         source=None,
-                        mountPoint="/home/ubuntu",
+                        mountPoint="/home/jovyan",
                         readOnly=False
                     )
                 ],
@@ -65,7 +105,7 @@ class TesSpawner(Spawner):
             ),
             docker=[
                 DockerExecutor(
-                    imageName=self.container_image,
+                    imageName=self.user_options.get("image"),
                     cmd=["bash", "-c", "{}".format(self.build_command())],
                     workDir=None,
                     stdin=None,
@@ -75,9 +115,11 @@ class TesSpawner(Spawner):
             ]
         )
 
+        # remove 'None' value fields
         return clean_task_message(attr.asdict(message))
 
     def get_env(self):
+        """get the needed jupyterhub enviromental varaibles"""
         env = super(TesSpawner, self).get_env()
         env.update(dict(
             JPY_USER=self.user.name,
@@ -93,6 +135,10 @@ class TesSpawner(Spawner):
         return env
 
     def build_command(self):
+        """
+        Since TES doesnt support passing enviromental variables to docker via
+        '-e' we must pass this information in the command
+        """
         exports = ["export"]
         env = self.get_env()
         whitelist = ["JPY_API_TOKEN", "JPY_BASE_URL", "JPY_COOKIE_NAME",
@@ -145,8 +191,8 @@ class TesSpawner(Spawner):
         self.log.info(
             "Started TES job: {0}".format(self.task_id)
         )
-        time.sleep(5)
-        ip, port = yield self._get_ip_and_port(0)
+
+        ip, port = self._get_ip_and_port(0)
         return (ip, port)
 
     @gen.coroutine
@@ -166,6 +212,7 @@ class TesSpawner(Spawner):
     @gen.coroutine
     def stop(self, now=False):
         """Stop the TES worker"""
+        # yield self._delete_task()
         raise NotImplementedError
 
     @gen.coroutine
@@ -178,7 +225,6 @@ class TesSpawner(Spawner):
         self.task_id = response_json['value']
         return response
 
-    @gen.coroutine
     def _get_task(self):
         """GET v1/jobs/<jobID>"""
         self.log.debug(
@@ -190,30 +236,28 @@ class TesSpawner(Spawner):
             raise RuntimeError("[ERROR] {0}".format(response.text))
         return response
 
-    @gen.coroutine
     def _get_task_status(self):
         if self.task_id is None or len(self.task_id) == 0:
             # job not running
             self.status = ""
             return self.status
 
-        response = yield self._get_task()
+        response = self._get_task()
         response_json = json.loads(response.text)
         status = response_json["state"]
         self.status = status
         return self.status
 
-    @gen.coroutine
     def _get_ip_and_port(self, retries):
         if retries >= 10:
             raise RuntimeError("Failed to get the ip and port of the docker container")
 
-        response = yield self._get_task()
+        response = self._get_task()
         response_json = json.loads(response.text)
 
         if "metadata" not in response_json:
             time.sleep(1)
-            return gen.Return(self._get_ip_and_port(retries + 1))
+            return self._get_ip_and_port(retries + 1)
 
         # suffix added to task_id to reflect step since TES supports an array
         # of DockerExecutors
@@ -231,3 +275,14 @@ class TesSpawner(Spawner):
         for k, v in task_meta['HostConfig']['PortBindings'].items():
             port = v[0]['HostPort']
         return ip, port
+
+    def _delete_task(self):
+        """DELETE v1/jobs/<jobID>"""
+        self.log.debug(
+            "DELETE {0}/{1}".format(self.endpoint, self.task_id)
+        )
+        endpoint = self.endpoint + "/" + self.task_id
+        response = requests.delete(url=endpoint)
+        if response.status_code // 100 != 2:
+            raise RuntimeError("[ERROR] {0}".format(response.text))
+        return response
