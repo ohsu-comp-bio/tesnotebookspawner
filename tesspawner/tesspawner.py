@@ -96,7 +96,7 @@ class TesSpawner(Spawner):
                         name="user_home",
                         sizeGb=self.user_options.get("disk"),
                         source=None,
-                        mountPoint="/home/jovyan",
+                        mountPoint="/home/jovyan/work",
                         readOnly=False
                     )
                 ],
@@ -211,8 +211,7 @@ class TesSpawner(Spawner):
     @gen.coroutine
     def stop(self, now=False):
         """Stop the TES worker"""
-        # yield self._delete_task()
-        raise NotImplementedError
+        return self._delete_task()
 
     @gen.coroutine
     def _post_task(self, json_message):
