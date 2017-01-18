@@ -39,6 +39,7 @@ class DockerExecutor(object):
     stdin = attrib(validator=optional(instance_of(str)))
     stdout = attrib(validator=optional(instance_of(str)))
     stderr = attrib(validator=optional(instance_of(str)))
+    port = attrib(validator=optional(instance_of(int)))
 
 
 @attrs

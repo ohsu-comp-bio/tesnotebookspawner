@@ -109,7 +109,8 @@ class TesSpawner(Spawner):
                     workDir=None,
                     stdin=None,
                     stdout="stdout",
-                    stderr="stderr"
+                    stderr="stderr",
+                    port=8888
                 )
             ]
         )
@@ -191,6 +192,7 @@ class TesSpawner(Spawner):
             "Started TES job: {0}".format(self.task_id)
         )
 
+        time.sleep(5)
         ip, port = self._get_ip_and_port(0)
         return (ip, port)
 
@@ -252,26 +254,18 @@ class TesSpawner(Spawner):
 
         response = self._get_task()
         response_json = json.loads(response.text)
+        logs = response_json["logs"]
 
-        if "metadata" not in response_json:
-            time.sleep(1)
+        if len(logs) > 1:
+            raise RuntimeError("Something went wrong")
+
+        if ("hostIP" not in logs[0]) or ("hostPort" not in logs[0]):
+            time.sleep(2)
             return self._get_ip_and_port(retries + 1)
 
-        # suffix added to task_id to reflect step since TES supports an array
-        # of DockerExecutors
-        self.log.info(
-            "Metadata for job: {0}".format(response_json)
-        )
-
-        task_meta = json.loads(response_json["metadata"][self.task_id + "0"])
-        ip = task_meta['NetworkSettings']['IPAddress']
-
+        ip = logs[0]["hostIP"]
         # TODO handle errors better
-        if len(task_meta['HostConfig']['PortBindings'].keys()) != 1:
-            raise RuntimeError("Container has more than one port binding")
-
-        for k, v in task_meta['HostConfig']['PortBindings'].items():
-            port = v[0]['HostPort']
+        port = logs[0]['hostPort']
         return ip, port
 
     def _delete_task(self):
