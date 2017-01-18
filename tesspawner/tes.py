@@ -32,6 +32,12 @@ class Resources(object):
 
 
 @attrs
+class PortMapping(object):
+    hostBinding = attrib(validator=instance_of(int))
+    containerPort = attrib(validator=instance_of(int))
+
+
+@attrs
 class DockerExecutor(object):
     imageName = attrib(validator=instance_of(str))
     cmd = attrib(validator=list_of(str))
@@ -39,7 +45,7 @@ class DockerExecutor(object):
     stdin = attrib(validator=optional(instance_of(str)))
     stdout = attrib(validator=optional(instance_of(str)))
     stderr = attrib(validator=optional(instance_of(str)))
-    port = attrib(validator=optional(instance_of(int)))
+    portBindings = attrib(validator=optional(list_of(PortMapping)))
 
 
 @attrs

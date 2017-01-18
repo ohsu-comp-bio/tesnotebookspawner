@@ -23,6 +23,7 @@ from .tes import (
     TaskParameter,
     Volume,
     Resources,
+    PortMapping,
     DockerExecutor,
     clean_task_message
 )
@@ -125,7 +126,12 @@ class TesSpawner(Spawner):
                     stdin=None,
                     stdout="stdout",
                     stderr="stderr",
-                    port=8888
+                    portBindings=[
+                        PortMapping(
+                            hostBinding=0,
+                            containerPort=8888
+                        )
+                    ]
                 )
             ]
         )
@@ -273,13 +279,13 @@ class TesSpawner(Spawner):
         if len(logs) > 1:
             raise RuntimeError("Something went wrong")
 
-        if ("hostIP" not in logs[0]) or ("hostPort" not in logs[0]):
+        if ("hostIP" not in logs[0]) or ("portBindings" not in logs[0]):
             time.sleep(2)
             return self._get_ip_and_port(retries + 1)
 
         ip = logs[0]["hostIP"]
         # TODO handle errors better
-        port = logs[0]['hostPort']
+        port = logs[0]["portBindings"][0]["hostBinding"]
         return ip, port
 
     def _delete_task(self):
