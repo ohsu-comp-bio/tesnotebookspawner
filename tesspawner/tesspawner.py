@@ -57,7 +57,7 @@ class TesSpawner(Spawner):
 
     @staticmethod
     def _process_option(v, default_val, typef):
-        if v == '':
+        if (v == '') or (v is None):
             return default_val
         else:
             return typef(v)
@@ -75,26 +75,41 @@ class TesSpawner(Spawner):
         options['disk'] = self._process_option(
             formdata.get('disk', [''])[0], 10, float
         )
-        options['image'] = formdata.get('image', [''])[0]
+        options['image'] = self._process_option(
+            formdata.get('image', [''])[0],
+            "jupyter/datascience-notebook:latest",
+            str
+        )
         self.log.info("Parsed options: {}".format(options))
         return options
 
     def _create_message(self):
         """Generate a TES Task message"""
+        image = self._process_option(
+            self.user_options.get("image"),
+            "jupyter/datascience-notebook:latest",
+            str
+        )
         message = Task(
-            name=self.user_options.get("image"),
+            name=image,
             projectID=None,
             description=None,
             inputs=[],
             outputs=[],
             resources=Resources(
-                minimumCpuCores=self.user_options.get("cpu"),
+                minimumCpuCores=self._process_option(
+                    self.user_options.get("cpu"), 1, int
+                ),
                 preemptible=None,
-                minimumRamGb=self.user_options.get("mem"),
+                minimumRamGb=self._process_option(
+                    self.user_options.get("mem"), 8, float
+                    ),
                 volumes=[
                     Volume(
                         name="user_home",
-                        sizeGb=self.user_options.get("disk"),
+                        sizeGb=self._process_option(
+                            self.user_options.get("disk"), 10, float
+                        ),
                         source=None,
                         mountPoint="/home/jovyan/work",
                         readOnly=False
@@ -104,7 +119,7 @@ class TesSpawner(Spawner):
             ),
             docker=[
                 DockerExecutor(
-                    imageName=self.user_options.get("image"),
+                    imageName=image,
                     cmd=["bash", "-c", "{}".format(self.build_command())],
                     workDir=None,
                     stdin=None,
@@ -192,7 +207,6 @@ class TesSpawner(Spawner):
             "Started TES job: {0}".format(self.task_id)
         )
 
-        time.sleep(5)
         ip, port = self._get_ip_and_port(0)
         return (ip, port)
 
