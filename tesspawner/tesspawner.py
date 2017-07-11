@@ -24,7 +24,7 @@ from .tes import (
     Volume,
     Resources,
     Ports,
-    DockerExecutor,
+    Executor,
     clean_task_message
 )
 
@@ -33,7 +33,7 @@ class TesSpawner(Spawner):
     # override default since TES may need longer
     start_timeout = Integer(300, config=True)
 
-    endpoint = Unicode("http://127.0.0.1:6000/v1/jobs",
+    endpoint = Unicode("http://127.0.0.1:6000/v1/tasks",
                        help="TES server endpoint").tag(config=True)
 
     notebook_command = Unicode("bash /usr/local/bin/start-singleuser.sh").tag(config=False)
@@ -93,33 +93,25 @@ class TesSpawner(Spawner):
         )
         message = Task(
             name=image,
-            projectID=None,
+            project=None,
             description=None,
             inputs=[],
             outputs=[],
             resources=Resources(
-                minimumCpuCores=self._process_option(
+                cpuCores=self._process_option(
                     self.user_options.get("cpu"), 1, int
                 ),
                 preemptible=None,
-                minimumRamGb=self._process_option(
+                ramGb=self._process_option(
                     self.user_options.get("mem"), 8, float
                     ),
-                volumes=[
-                    Volume(
-                        name="user_home",
-                        sizeGb=self._process_option(
-                            self.user_options.get("disk"), 10, float
-                        ),
-                        source=None,
-                        mountPoint="/home/jovyan/work",
-                        readOnly=False
-                    )
-                ],
+                sizeGb=self._process_option(
+                    self.user_options.get("disk"), 10, float
+                ),
                 zones=None
             ),
-            docker=[
-                DockerExecutor(
+            executors=[
+                Executor(
                     imageName=image,
                     cmd=["bash", "-c", "{}".format(self.build_command())],
                     workDir=None,
@@ -218,7 +210,7 @@ class TesSpawner(Spawner):
 
     @gen.coroutine
     def poll(self):
-        terminal = ["Complete", "Error", "SystemError", "Canceled"]
+        terminal = ["COMPLETE", "ERROR", "SYSTEM_ERROR", "CANCELED"]
         self._get_task_status()
 
         self.log.debug(
@@ -233,20 +225,19 @@ class TesSpawner(Spawner):
     @gen.coroutine
     def stop(self, now=False):
         """Stop the TES worker"""
-        return self._delete_task()
+        return self._cancel_task()
 
     @gen.coroutine
     def _post_task(self, json_message):
-        """POST task to v1/jobs"""
+        """POST task to v1/tasks"""
         response = requests.post(url=self.endpoint, data=json_message)
         if response.status_code // 100 != 2:
             raise RuntimeError("[ERROR] {0}".format(response.text))
-        response_json = json.loads(response.text)
-        self.task_id = response_json['value']
-        return response
+        self.task_id = response.json()['id']
+        return
 
     def _get_task(self):
-        """GET v1/jobs/<jobID>"""
+        """GET v1/tasks/<id>"""
         self.log.debug(
             "GET {0}/{1}".format(self.endpoint, self.task_id)
         )
@@ -254,7 +245,7 @@ class TesSpawner(Spawner):
         response = requests.get(url=endpoint)
         if response.status_code // 100 != 2:
             raise RuntimeError("[ERROR] {0}".format(response.text))
-        return response
+        return response.json()
 
     def _get_task_status(self):
         if self.task_id is None or len(self.task_id) == 0:
@@ -263,42 +254,41 @@ class TesSpawner(Spawner):
             return self.status
 
         response = self._get_task()
-        response_json = json.loads(response.text)
-        status = response_json["state"]
+        status = response["state"]
         self.status = status
-        return self.status
+        return
 
     def _get_ip_and_port(self, retries):
         if retries >= 10:
             raise RuntimeError("Failed to get the ip and port of the docker container")
 
         response = self._get_task()
-        response_json = json.loads(response.text)
-        if ("logs" not in response_json):
+        if ("logs" not in response):
             time.sleep(2)
             return self._get_ip_and_port(retries + 1)
 
-        logs = response_json["logs"]
-        
+        logs = response["logs"]
+
         if (len(logs) != 1):
             time.sleep(2)
             return self._get_ip_and_port(retries + 1)
-            
+
         if ("hostIP" not in logs[0]) and ("ports" in logs[0]):
             time.sleep(2)
             return self._get_ip_and_port(retries + 1)
-        
+
         ip = logs[0]["hostIP"]
         port = logs[0]["ports"][0]["host"]
         return ip, port
 
-    def _delete_task(self):
-        """DELETE v1/jobs/<jobID>"""
+    def _cancel_task(self):
+        """post v1/tasks/<id>:cancel"""
         self.log.debug(
-            "DELETE {0}/{1}".format(self.endpoint, self.task_id)
+            "POST {0}/{1}:cancel".format(self.endpoint, self.task_id)
         )
-        endpoint = self.endpoint + "/" + self.task_id
-        response = requests.delete(url=endpoint)
+        endpoint = self.endpoint + "/" + self.task_id + ":cancel"
+        response = requests.post(url=endpoint)
         if response.status_code // 100 != 2:
             raise RuntimeError("[ERROR] {0}".format(response.text))
-        return response
+        self.status = "CANCELED"
+        return

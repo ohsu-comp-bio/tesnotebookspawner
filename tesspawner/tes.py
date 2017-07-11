@@ -1,5 +1,5 @@
 from attr import attrs, attrib
-from attr.validators import instance_of, optional
+from attr.validators import instance_of, optional, in_
 from .validators import list_of
 
 
@@ -7,27 +7,18 @@ from .validators import list_of
 class TaskParameter(object):
     name = attrib(validator=optional(instance_of(str)))
     description = attrib(validator=optional(instance_of(str)))
-    location = attrib(validator=instance_of(str))
+    url = attrib(validator=instance_of(str))
     path = attrib(validator=instance_of(str))
-    param_class = attrib(validator=instance_of(str))
-    create = attrib(validator=optional(instance_of(bool)))
-
-
-@attrs
-class Volume(object):
-    name = attrib(validator=optional(instance_of(str)))
-    sizeGb = attrib(validator=instance_of((float, int)))
-    source = attrib(validator=optional(instance_of(str)))
-    mountPoint = attrib(validator=instance_of(str))
-    readOnly = attrib(validator=optional(instance_of(bool)))
+    type = attrib(validator=in_(["FILE", "DIRECTORY"]))
+    contents = attrib(validator=optional(instance_of(str)))
 
 
 @attrs
 class Resources(object):
-    minimumCpuCores = attrib(validator=instance_of(int))
+    cpuCores = attrib(validator=instance_of(int))
+    ramGb = attrib(validator=instance_of((float, int)))
+    sizeGb = attrib(validator=instance_of((float, int)))
     preemptible = attrib(validator=optional(instance_of(bool)))
-    minimumRamGb = attrib(validator=instance_of((float, int)))
-    volumes = attrib(validator=list_of(Volume))
     zones = attrib(validator=optional(list_of(str)))
 
 
@@ -38,7 +29,7 @@ class Ports(object):
 
 
 @attrs
-class DockerExecutor(object):
+class Executor(object):
     imageName = attrib(validator=instance_of(str))
     cmd = attrib(validator=list_of(str))
     workDir = attrib(validator=optional(instance_of(str)))
@@ -46,17 +37,20 @@ class DockerExecutor(object):
     stdout = attrib(validator=optional(instance_of(str)))
     stderr = attrib(validator=optional(instance_of(str)))
     ports = attrib(validator=optional(list_of(Ports)))
+    environ = attrib(validator=optional(instance_of(dict)))
 
 
 @attrs
 class Task(object):
     name = attrib(validator=optional(instance_of(str)))
-    projectID = attrib(validator=optional(instance_of(str)))
+    project = attrib(validator=optional(instance_of(str)))
     description = attrib(validator=optional(instance_of(str)))
     inputs = attrib(validator=list_of(TaskParameter))
     outputs = attrib(validator=list_of(TaskParameter))
     resources = attrib(validator=instance_of(Resources))
-    docker = attrib(validator=list_of(DockerExecutor))
+    executors = attrib(validator=list_of(Executor))
+    volumes = attrib(validator=optional(list_of(str)))
+    tags = attrib(validator=optional(instance_of(dict)))
 
 
 def clean_task_message(obj):
