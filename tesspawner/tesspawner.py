@@ -3,44 +3,42 @@ A Spawner for JupyterHub that runs each user's server in a separate docker
 container spun up by TES
 """
 
-import attr
-import json
-import requests
-import time
+import polling
 
 from tornado import gen
 from jupyterhub.spawner import Spawner
 from traitlets import (
-    Dict,
     Unicode,
-    Bool,
     Integer,
-    Any,
-    default
+    default,
+    observe
 )
-from .tes import (
+from tes import (
     Task,
     TaskParameter,
-    Volume,
     Resources,
     Ports,
     Executor,
-    clean_task_message
+    HTTPClient
 )
 
 
 class TesSpawner(Spawner):
     # override default since TES may need longer
     start_timeout = Integer(300, config=True)
+    endpoint = Unicode(help="TES server endpoint").tag(config=True)
+    notebook_command = Unicode(
+        "bash /usr/local/bin/start-singleuser.sh"
+    ).tag(config=False)
+    task_id = Unicode().tag(config=False)
+    status = Unicode().tag(config=False)
+    _client = None
 
-    endpoint = Unicode("http://127.0.0.1:6000/v1/tasks",
-                       help="TES server endpoint").tag(config=True)
+    @observe("endpoint")
+    def init_client(self, change):
+        self._client = HTTPClient(change["new"])
 
-    notebook_command = Unicode("bash /usr/local/bin/start-singleuser.sh").tag(config=False)
-
-    task_id = Unicode("")
-    status = Unicode("")
-
+    @default("options_form")
     def _options_form_default(self):
         return """
         <label for="image">Docker Image</label>
@@ -58,7 +56,7 @@ class TesSpawner(Spawner):
 
     @staticmethod
     def _process_option(v, default_val, typef):
-        if (v == '') or (v is None):
+        if (v == "") or (v is None):
             return default_val
         else:
             return typef(v)
@@ -67,17 +65,17 @@ class TesSpawner(Spawner):
         """Handle user specifed options"""
         self.log.info("Form data: {}".format(formdata))
         options = {}
-        options['cpu'] = self._process_option(
-            formdata.get('cpu', [''])[0], 1, int
+        options["cpu"] = self._process_option(
+            formdata.get("cpu", [""])[0], 1, int
         )
-        options['mem'] = self._process_option(
-            formdata.get('mem', [''])[0], 8, float
+        options["mem"] = self._process_option(
+            formdata.get("mem", [""])[0], 8, float
         )
-        options['disk'] = self._process_option(
-            formdata.get('disk', [''])[0], 10, float
+        options["disk"] = self._process_option(
+            formdata.get("disk", [""])[0], 10, float
         )
-        options['image'] = self._process_option(
-            formdata.get('image', [''])[0],
+        options["image"] = self._process_option(
+            formdata.get("image", [""])[0],
             "jupyter/datascience-notebook:latest",
             str
         )
@@ -91,47 +89,43 @@ class TesSpawner(Spawner):
             "jupyter/datascience-notebook:latest",
             str
         )
+
         message = Task(
             name=image,
-            project=None,
-            description=None,
             inputs=[],
             outputs=[],
             resources=Resources(
-                cpuCores=self._process_option(
+                cpu_cores=self._process_option(
                     self.user_options.get("cpu"), 1, int
                 ),
-                preemptible=None,
-                ramGb=self._process_option(
+                ram_gb=self._process_option(
                     self.user_options.get("mem"), 8, float
                     ),
-                sizeGb=self._process_option(
+                size_gb=self._process_option(
                     self.user_options.get("disk"), 10, float
                 ),
-                zones=None
             ),
             executors=[
                 Executor(
-                    imageName=image,
-                    cmd=["bash", "-c", "{}".format(self.build_command())],
-                    workDir=None,
-                    stdin=None,
-                    stdout="stdout",
-                    stderr="stderr",
+                    image_name=image,
+                    cmd=["bash", "-c", self.notebook_command],
+                    workdir="/home/jovyan/work",
+                    stdout="/home/jovyan/work/stdout",
+                    stderr="/home/jovyan/work/stderr",
                     ports=[
                         Ports(
                             host=0,
                             container=8888
                         )
-                    ]
+                    ],
+                    environ=self._get_env()
                 )
             ]
         )
 
-        # remove 'None' value fields
-        return clean_task_message(attr.asdict(message))
+        return message
 
-    def get_env(self):
+    def _get_env(self):
         """get the needed jupyterhub enviromental varaibles"""
         env = super(TesSpawner, self).get_env()
         env.update(dict(
@@ -143,47 +137,38 @@ class TesSpawner(Spawner):
         ))
 
         if self.notebook_dir:
-            env['NOTEBOOK_DIR'] = self.notebook_dir
+            env["NOTEBOOK_DIR"] = self.notebook_dir
 
-        return env
-
-    def build_command(self):
-        """
-        Since TES doesnt support passing enviromental variables to docker via
-        '-e' we must pass this information in the command
-        """
-        exports = ["export"]
-        env = self.get_env()
         whitelist = ["JPY_API_TOKEN", "JPY_BASE_URL", "JPY_COOKIE_NAME",
                      "JPY_HUB_API_URL", "JPY_HUB_PREFIX", "JPY_USER",
                      "NOTEBOOK_DIR"]
+        filtered_env = {}
         for k, v in env.items():
             if k in whitelist:
-                exports.append("{0}={1}".format(k, v))
+                filtered_env[k] = v
 
-        cmd = " ".join(exports) + " && " + self.notebook_command
-        return cmd
+        return filtered_env
 
     def load_state(self, state):
         """load task_id from state"""
         super(TesSpawner, self).load_state(state)
-        self.task_id = state.get('task_id', '')
-        self.status = state.get('status', '')
+        self.task_id = state.get("task_id", "")
+        self.status = state.get("status", "")
 
     def get_state(self):
         """add task_id to state"""
         state = super(TesSpawner, self).get_state()
         if self.task_id:
-            state['task_id'] = self.task_id
+            state["task_id"] = self.task_id
         if self.status:
-            state['status'] = self.status
+            state["status"] = self.status
         return state
 
     def clear_state(self):
         """clear job_id state"""
         super(TesSpawner, self).clear_state()
         self.task_id = ""
-        self.status = ''
+        self.status = ""
 
     @gen.coroutine
     def start(self):
@@ -199,7 +184,7 @@ class TesSpawner(Spawner):
         )
 
         # post task message to server
-        self._post_task(json.dumps(message))
+        self.task_id = self._client.create_task(message)
 
         self.log.info(
             "Started TES job: {0}".format(self.task_id)
@@ -225,70 +210,39 @@ class TesSpawner(Spawner):
     @gen.coroutine
     def stop(self, now=False):
         """Stop the TES worker"""
-        return self._cancel_task()
-
-    @gen.coroutine
-    def _post_task(self, json_message):
-        """POST task to v1/tasks"""
-        response = requests.post(url=self.endpoint, data=json_message)
-        if response.status_code // 100 != 2:
-            raise RuntimeError("[ERROR] {0}".format(response.text))
-        self.task_id = response.json()['id']
-        return
-
-    def _get_task(self):
-        """GET v1/tasks/<id>"""
-        self.log.debug(
-            "GET {0}/{1}".format(self.endpoint, self.task_id)
-        )
-        endpoint = self.endpoint + "/" + self.task_id
-        response = requests.get(url=endpoint)
-        if response.status_code // 100 != 2:
-            raise RuntimeError("[ERROR] {0}".format(response.text))
-        return response.json()
+        if self.task_id != "":
+            return self._client.cancel_task(self.task_id)
+        else:
+            return
 
     def _get_task_status(self):
-        if self.task_id is None or len(self.task_id) == 0:
+        if self.task_id == "":
             # job not running
             self.status = ""
             return self.status
 
-        response = self._get_task()
-        status = response["state"]
-        self.status = status
+        response = self._client.get_task(self.task_id, "MINIMAL")
+        self.status = response.state
         return
 
-    def _get_ip_and_port(self, retries):
-        if retries >= 10:
-            raise RuntimeError("Failed to get the ip and port of the docker container")
+    def _get_ip_and_port(self, timeout=60):
+        def check_success(r):
+            if r.logs is not None:
+                if r.logs[0].logs is not None:
+                    s1 = r.logs[0].logs[0].host_ip is not None
+                    s2 = r.logs[0].logs[0].ports is not None
+                    if s1 and s2:
+                        if r.logs[0].logs[0].ports[0].host is not None:
+                            return True
+            return False
 
-        response = self._get_task()
-        if ("logs" not in response):
-            time.sleep(2)
-            return self._get_ip_and_port(retries + 1)
-
-        logs = response["logs"]
-
-        if (len(logs) != 1):
-            time.sleep(2)
-            return self._get_ip_and_port(retries + 1)
-
-        if ("hostIP" not in logs[0]) and ("ports" in logs[0]):
-            time.sleep(2)
-            return self._get_ip_and_port(retries + 1)
-
-        ip = logs[0]["hostIP"]
-        port = logs[0]["ports"][0]["host"]
-        return ip, port
-
-    def _cancel_task(self):
-        """post v1/tasks/<id>:cancel"""
-        self.log.debug(
-            "POST {0}/{1}:cancel".format(self.endpoint, self.task_id)
+        r = polling.poll(
+            lambda: self._client.get_task(self.task_id, "FULL"),
+            check_success=check_success,
+            step=0.1,
+            timeout=timeout
         )
-        endpoint = self.endpoint + "/" + self.task_id + ":cancel"
-        response = requests.post(url=endpoint)
-        if response.status_code // 100 != 2:
-            raise RuntimeError("[ERROR] {0}".format(response.text))
-        self.status = "CANCELED"
-        return
+
+        ip = r.logs[0].logs[0].host_ip
+        port = r.logs[0].logs[0].ports[0].host
+        return ip, port
