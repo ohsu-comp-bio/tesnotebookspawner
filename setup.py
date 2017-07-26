@@ -32,12 +32,11 @@ setup_args = dict(
     long_description="",
     author="Adam Struck",
     author_email="strucka@ohsu.edu",
-    url="",
+    url="https://github.com/ohsu-comp-bio/tesnotebookspawner",
     platforms="Linux, Mac OS X",
     keywords=['Interactive', 'Interpreter', 'Shell', 'Web'],
     classifiers=[
         'Intended Audience :: Developers',
-        'Intended Audience :: System Administrators',
         'Intended Audience :: Science/Research',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',

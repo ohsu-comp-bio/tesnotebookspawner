@@ -54,13 +54,13 @@ docs/_build/
 # PyBuilder
 target/
 
-userlist
 ssl.cert
 ssl.key
-env
-oauthenticator.py
-jupyterhub.sqlite
-src
 
-jupyterhub-scratch
-jupyterhub-spawners
+venv
+.venv
+
+jupyterhub.sqlite
+jupyterhub_cookie_secret
+
+funnel-work-dir
